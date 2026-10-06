@@ -1,0 +1,78 @@
+# Local credentials and environment configuration (keep example templates).
+/env.sh
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+/credentials.json
+/service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments and generated caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# Java/Maven build products.
+target/
+*.class
+
+# Local runs, API-attempt ledgers, workspaces, and analysis exports.
+# Preserve these on disk; curated publication data under papers/ stays trackable.
+/output/
+/analysis_output/
+/logs/
+/log
+/tmp/
+/test_workspace*/
+/cost_aware_analysis.csv
+/induced_cost_analysis.csv
+/switching_analysis_results.csv
+/switching_analysis_results.csv.prefix-backup
+/review.csv
+/review_fresh.csv
+/review_graded_so_far.csv
+
+# LaTeX intermediate files, compiled manuscripts, and upload packages.
+# Do not ignore all PDF/PNG/CSV files: manuscript figures and source data are inputs.
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.blg
+*.bcf
+*.run.xml
+/papers/**/control_generated_disturbance.pdf
+/papers/**/cas_stochastic_policy_paper.pdf
+/papers/*.zip
+/papers/**/rendered/
+
+# Machine-local editor settings, OS metadata, and editor backup files.
+/.claude/settings.local.json
+/.idea/
+/.vscode/
+*.iml
+.DS_Store
+._*
+Thumbs.db
+*.swp
+*.swo
+*~
