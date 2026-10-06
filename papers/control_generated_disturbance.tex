@@ -1,0 +1,522 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+% Powered real-LLM run parameters (6 collapse-capable tasks x 8 repeats).
+\newcommand{\poweredTasks}{6}
+\newcommand{\poweredRepeats}{8}
+\newcommand{\poweredEpisodes}{576}
+
+\title{\textbf{When the Governor Becomes the Disturbance:}\\[0.3em]
+Control-Generated Disturbance and Cost-Aware Backoff in Governed Tool-Using Agents}
+\author{Veronique Ziegler\\Independent Researcher, Critical Attention Systems}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A governor that monitors a tool-using agent and intervenes to keep it on task
+is normally treated as a pure stabiliser. We show it need not be. When
+corrective intervention carries a cost---when tightening the control loop
+itself perturbs the actions it regulates---a cost-blind governor can drive the
+agent it supervises into a self-reinforcing collapse: each induced failure
+raises the regulatory state, which tightens control further, which induces more
+failures. We study this \emph{control-generated disturbance} in a discrete
+tool-use substrate. On a large-sample stochastic-policy substrate we
+demonstrate three things: (i) raising the induced-cost scale $\alpha$ under a
+cost-blind governor amplifies into a block-storm collapse, and this holds under
+two independent cost channels---a fabricated transient failure and a
+genuinely-executed corrupted action---so the collapse is not an artifact of the
+injection; (ii) a \emph{cost-aware} governor that backs off when its own recent
+tightening has been generating failures suppresses its regulatory intensity in
+a monotone dose-response with backoff sensitivity; and (iii) against a full
+baseline ladder, cost-aware backoff beats a fixed weak governor matched to its
+realised intervention rate, so the benefit is genuinely adaptive rather than
+merely intervening less. On a real large-language-model agent
+(Gemini~2.5~Flash), a powered run ($\poweredTasks$ collapse-capable tasks
+$\times$ $\poweredRepeats$ repeats, $\poweredEpisodes$ episodes) reproduces all
+three effects: amplification into block-storm collapse, the suppression
+dose-response, and success rescue that peaks at an intermediate backoff
+strength. The results identify intervention cost
+and cost-awareness as design variables for agent governors: a governor's own
+interventions, when costly, can create positive feedback that a cost-aware
+governor breaks---a structure that appears on both a hand-coded substrate and a
+real LLM, so it is not an artifact of any single formalism.
+\end{abstract}
+
+\section{Introduction}
+
+Autonomous tool-using agents are increasingly deployed with a supervisory
+\emph{governor}~\cite{astrom2008feedback}: a monitor that inspects the agent's
+trajectory, emits a regulatory signal, and can warn or block proposed actions
+to keep the agent
+from looping, retrying failed assumptions, or answering prematurely. The
+implicit assumption is that governance is one-directionally good: more
+regulation can only help, or at worst do nothing.
+
+This assumption fails when regulatory intervention has a cost that feeds back
+into the agent's own state. A governor that tightens its control in response to
+trouble is, in realistic systems, not free: a blocked action forces a re-plan,
+an injected constraint narrows the action distribution, an aggressive
+intervention can corrupt or delay the next tool call. If that induced
+disturbance then registers as further trouble, the governor tightens again, and
+the loop can run away. The agent is no longer merely being regulated;
+\emph{the governor has become a disturbance source}.
+
+This question is a natural extension of the IRAM-$\Omega$-Q line of
+adaptive-agent
+models~\cite{ziegler2026iramomegaq,ziegler2026carryover,ziegler2026switching},
+which studies, in a continuous quantum-like state model, how the timing and
+demand of regulation shape an agent's control burden. It is also a standard
+concern in feedback control, where an over-eager regulator can inject the very
+disturbance it is trying to correct~\cite{astrom2008feedback}. We pose it as a
+hypothesis---that a governor's own tightening, when it carries a cost, becomes a
+disturbance source that can drive positive feedback---and ask whether it holds
+on two unrelated substrates: a symbolic tool-using agent supervised by a
+finite-state governor, and a real large-language-model (LLM) agent. If the
+positive-feedback-and-cost-awareness structure appears under both, it is not an
+artifact of any single formalism.
+
+Our results are demonstrated on two substrates: a hand-coded stochastic-policy
+substrate, where matched large-$N$ seeding is cheap, and a powered run on a real
+LLM:
+\begin{enumerate}[leftmargin=1.4em]
+\item a cost-blind governor amplifies into block-storm collapse as $\alpha$
+grows, on both substrates, under two independent induced-cost channels
+(Sections~\ref{sec:amplification},~\ref{sec:gemini});
+\item a cost-aware governor suppresses its intensity in a monotone
+dose-response with backoff sensitivity, on both substrates
+(Sections~\ref{sec:suppression},~\ref{sec:gemini}); and
+\item against a full baseline ladder, cost-aware backoff outperforms a fixed
+weak governor at matched intervention rate, establishing that the effect is
+adaptive (Section~\ref{sec:baselines}).
+\end{enumerate}
+On the real LLM, the powered run (Section~\ref{sec:gemini}) confirms the full
+collapse-and-rescue picture---amplification, suppression, and rescue---and adds
+a design finding: the rescue peaks at an intermediate backoff strength.
+
+\section{Background and scope}
+\label{sec:background}
+
+The IRAM-$\Omega$-Q model represents an adaptive agent by a normalised state,
+an entropy-like uncertainty signal, and an adaptive gain $\mu(t)$ interpreted
+as regulatory demand, and compares regulation-first (RF) and disturbance-first
+(DF) causal orderings~\cite{ziegler2026carryover}. A recurring theme in that
+line, and in feedback control more generally~\cite{astrom2008feedback}, is that
+the \emph{source} of a disturbance matters, not only its magnitude---and in
+particular that a controller's own tightening can itself act as a disturbance.
+We model that tightening cost, in the continuous formalism's terms, as an
+induced disturbance
+$\eta_{\mathrm{induced}} =
+\alpha\max(0,\mu_{\mathrm{after}}-\mu_{\mathrm{before}})^2$ charged only when
+the controller tightens, and take it as the mechanism whose discrete analogue we
+study.
+
+Our hypothesis is exactly this---that control-generated disturbance can create
+positive feedback that a cost-aware controller can break---tested on a different
+substrate. We do \emph{not} claim to reproduce the continuous formalism's
+numerics or architecture; the discrete induced-cost mechanism of
+Section~\ref{sec:method} is a deliberately simple analogue of
+$\eta_{\mathrm{induced}}$, and the correspondence is structural, not
+quantitative.
+
+\section{The governed tool-use substrate}
+\label{sec:substrate}
+
+\paragraph{Agent, governor, task.}
+An episode places an agent in a small file workspace and asks it to locate and
+summarise a target file; the prompt embeds an incorrect assumption (a wrong
+filename, folder, extension, or a confidently-named nonexistent path), so
+recovery requires inspecting the workspace. Each step the agent proposes one
+tool action (\texttt{READ\_FILE} or \texttt{LIST\_DIRECTORY}) or a final
+answer. A finite-state \emph{governor} evaluates the trajectory and emits a
+regulatory state, ordered by severity,
+$\textsc{Normal}\to\textsc{Disturbed}\to\textsc{Recovering}\to\textsc{Stuck}$,
+plus a terminal \textsc{Released}. \textsc{Disturbed} follows any failed tool
+call; \textsc{Recovering} and \textsc{Stuck} follow repeated failures or
+sustained looping; \textsc{Released} follows recovery of sufficient content.
+The governor can reshape the agent's action distribution toward inspection
+(reweighting) and can \emph{block} an action that repeats a failed assumption
+or continues tool use after \textsc{Released}. Task success is a substring
+match of the final answer against the known target answer.
+
+\paragraph{Two agent realisations.}
+The \textbf{stochastic policy}~\cite{sutton2018rl} samples each step from a governor-modulated
+weighted categorical over candidate actions; behavioural presets give
+archetypes (an \emph{impulsive} high-entropy sampler; a \emph{persistent}
+archetype that clings to failed actions). It is deterministic-in-distribution,
+so thousands of matched seeds are cheap; it tests substrate-independence of the
+mechanism, not learned behaviour. The \textbf{real LLM agent} delegates action
+selection to Gemini~2.5~Flash via a JSON tool-call prompt embedding the current
+regulatory signal.
+
+\paragraph{Regulation intensity.}
+We give the governor's tightening a scalar via a monotone intensity over its
+state,
+\begin{equation}
+\begin{gathered}
+g(\textsc{Normal})=0,\quad
+g(\textsc{Disturbed})=0.75,\quad
+g(\textsc{Recovering})=0.85,\\
+g(\textsc{Stuck})=0.95,\quad
+g(\textsc{Released})=0.99,
+\end{gathered}
+\label{eq:intensity}
+\end{equation}
+equal to one minus the governor's retry-suppression multiplier. Higher $g$
+means harder clamping; this is the discrete counterpart of the continuous gain.
+
+\section{Method: control-generated disturbance}
+\label{sec:method}
+
+\paragraph{Induced cost.}
+Only \emph{positive} tightening generates cost. With
+$\Delta g^{+}(t)=\max(0,\,g(t)-g(t-1))$, an induced event is drawn at each step
+with probability
+\begin{equation}
+p_{\mathrm{induced}}(t)=\min\!\big(1,\;\alpha\,\Delta g^{+}(t)^2\big),
+\label{eq:pinduced}
+\end{equation}
+$\alpha\ge0$ the single swept scale. At $\alpha=0$ no cost is ever generated
+and the agent reduces exactly to the ordinary governed agent (a regression
+anchor). Because the escalation $\textsc{Normal}\to\textsc{Disturbed}$ is a
+large jump ($\Delta g^{+}=0.75$), firing saturates near $\alpha\approx1.8$, so
+the informative range is $\alpha\in[0,2]$.
+
+\paragraph{Two cost channels.}
+An induced event is realised through one of two mechanisms, applied to the
+agent's intended action so that the governor's repeat logic engages
+identically:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{Result injection}: the intended action's result is replaced by a
+fabricated transient failure.
+\item \textbf{Argument corruption}: a bad-path (corruption-suffixed) version of
+the intended action is \emph{actually executed} by the real tool, which returns
+its own genuine not-found error; the failure is attributed to the intended
+action. Nothing is fabricated---a genuinely degraded call really failed.
+\end{itemize}
+Reporting both guards against the objection that the collapse is engineered by
+a single injection trick. (A softer corruption that leaves the target valid
+attenuates the loop, confirming that the cost must yield governor-visible
+failures to drive escalation.)
+
+\paragraph{The feedback loop.}
+An induced failure is a real failed action in history. The governor escalates,
+tightens ($g$ rises), which raises $\Delta g^{+}$ and hence
+$p_{\mathrm{induced}}$ at later escalations, producing more failures. A
+cost-blind governor always escalates on failure and cannot exit the loop; the
+collapse manifests as a \emph{block storm}, because the governor also blocks
+the agent from retrying its now-failed intended action.
+
+\paragraph{Cost-aware backoff.}
+The cost-aware governor maintains an exponentially weighted induced-failure rate
+$r(t)=(1-\lambda)r(t-1)+\lambda\,\mathbb{1}[\text{induced at }t]$
+($\lambda=0.3$) and applies its regulation---reweighting \emph{and}
+blocking---only with probability
+\begin{equation}
+p_{\mathrm{apply}}(t)=1-\min\!\big(1,\;k\,r(t)\big),
+\label{eq:papply}
+\end{equation}
+$k>0$ the backoff sensitivity (swept over $\{1.5,3.0,6.0\}$). On a backed-off
+step the agent sees \textsc{Normal} and no block fires, so $g=0$, no cost is
+generated, $r$ decays, and $p_{\mathrm{apply}}$ recovers---negative feedback
+that can break the loop. A \textbf{fixed weak governor} that applies regulation
+at a constant probability, non-adaptively, serves as a control for whether
+adaptivity itself matters (Section~\ref{sec:baselines}).
+
+\section{Demonstrated results I: stochastic substrate}
+\label{sec:stochastic}
+
+All results in this section use $2000$ matched seeds per (task, condition)
+cell across eight file-recovery tasks, real-time (RF) governance, and a
+16-step budget.
+
+\subsection{Cost-blind governance amplifies into collapse}
+\label{sec:amplification}
+
+Under the cost-blind governor, raising $\alpha$ collapses success while the
+governor's intensity stays pinned, and this holds under both cost channels
+(Table~\ref{tab:mechanisms}). For the persistent archetype, success falls
+$0.88\to0.49\to0.18$ (result injection) and $0.88\to0.48\to0.19$ (argument
+corruption) as $\alpha$ goes $0\to1\to2$, with $\bar g$ pinned near $0.71$
+throughout. The near-identity across a fabricated-failure channel and a
+genuinely-executed-corrupted-action channel shows the collapse is a property of
+induced governor-visible failure, not of the specific injection.
+
+\begin{table}[t]
+\centering
+\caption{Mechanism robustness (persistent archetype, $2000$ seeds/cell $\times$
+$8$ tasks). Success and mean intensity $\bar g$ by cost channel, backoff, and
+$\alpha$. Cost-blind amplification and cost-aware suppression are essentially
+identical under both channels.}
+\label{tab:mechanisms}
+\begin{tabular}{llccc}
+\toprule
+ & & $\alpha{=}0$ & $\alpha{=}1$ & $\alpha{=}2$ \\
+\midrule
+\multirow{2}{*}{Result injection}
+ & cost-blind (succ / $\bar g$)  & $0.88\,/\,0.72$ & $0.49\,/\,0.71$ & $0.18\,/\,0.70$ \\
+ & cost-aware (succ / $\bar g$)  & $0.88\,/\,0.72$ & $0.65\,/\,0.50$ & $0.40\,/\,0.29$ \\
+\midrule
+\multirow{2}{*}{Argument corruption}
+ & cost-blind (succ / $\bar g$)  & $0.88\,/\,0.72$ & $0.48\,/\,0.71$ & $0.19\,/\,0.70$ \\
+ & cost-aware (succ / $\bar g$)  & $0.88\,/\,0.72$ & $0.64\,/\,0.50$ & $0.40\,/\,0.29$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cost-aware governance suppresses its own intensity}
+\label{sec:suppression}
+
+Under the cost-aware governor, $\bar g$ falls with $\alpha$ (Table~\ref{tab:mechanisms},
+persistent: $0.72\to0.50\to0.29$) while the cost-blind $\bar g$ stays pinned---the
+suppression branch, absent by construction under cost-blindness. Suppression
+deepens monotonically with backoff sensitivity $k$ (impulsive $k{=}6$:
+$0.36\to0.11$; persistent $k{=}6$: $0.69\to0.21$). Success rescue is
+agent-dependent: the persistent archetype is rescued (Table~\ref{tab:mechanisms},
+$\alpha{=}2$: cost-blind $0.18$ vs cost-aware $0.40$), whereas the impulsive
+archetype---whose un-governed floor is near-catastrophic---is not, because
+backing off returns it toward that floor faster than it saves on induced cost.
+Cost-awareness helps exactly when the agent has a survivable un-regulated floor.
+
+\subsection{Cost-aware backoff is adaptive, not merely less governance}
+\label{sec:baselines}
+
+Table~\ref{tab:baselines} places the induced-cost conditions on a full baseline
+ladder at $\alpha=2$. The key control is the \emph{fixed weak governor}, which
+intervenes at a constant probability matched to cost-aware's realised
+intervention rate ($0.45$ for persistent). For the persistent archetype:
+ordinary governance at $\alpha=0$ lifts success far above no governance
+($0.88$ vs $0.31$); induced cost makes cost-blind governance actively harmful,
+dropping success \emph{below} no governance ($0.19$); cost-aware backoff
+restores it above the un-governed level ($0.40$); and, decisively, the fixed
+weak governor at the same intervention rate reaches only $0.30$. Adaptivity---%
+intervening when it matters and standing down when its tightening is
+backfiring---accounts for the $0.10$ gap between cost-aware and rate-matched
+fixed governance; it is not reducible to governing less. The impulsive
+archetype shows the same ladder shape with the rescue absent, consistent with
+its non-survivable un-governed floor.
+
+\begin{table}[t]
+\centering
+\caption{Baseline ladder at $\alpha=2$ (result injection, $2000$ seeds/cell
+$\times$ $8$ tasks). The fixed weak governor is matched to cost-aware's realised
+intervention (apply) rate. For persistent, cost-aware ($0.40$) beats
+rate-matched fixed ($0.30$), and cost-blind governance ($0.19$) is worse than no
+governance ($0.31$).}
+\label{tab:baselines}
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{persistent} & \multicolumn{2}{c}{impulsive} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+condition & success & apply rate & success & apply rate \\
+\midrule
+no governor                 & $0.31$ & --     & $0.09$ & -- \\
+governor, $\alpha{=}0$       & $0.88$ & $1.00$ & $0.51$ & $1.00$ \\
+cost-blind, $\alpha{=}2$     & $0.19$ & $1.00$ & $0.11$ & $1.00$ \\
+cost-aware, $\alpha{=}2$     & $\mathbf{0.40}$ & $0.46$ & $0.10$ & $0.75$ \\
+fixed weak, $\alpha{=}2$ (matched) & $0.30$ & $0.45$ & $0.08$ & $0.72$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Demonstrated results II: real-LLM amplification, suppression, and rescue}
+\label{sec:gemini}
+
+We ran the induced-cost sweep with Gemini~2.5~Flash as the agent: a cost-blind
+governor and cost-aware governors at backoff sensitivity $k\in\{1.5,3.0,6.0\}$,
+induced-cost scales $\alpha\in\{0,1,2\}$, six collapse-capable wrong-path tasks (each escalation-prone \emph{and} solvable---a
+confident wrong-path hint paired with a short verbatim-reproducible answer), and
+eight repeats per cell, for $\poweredEpisodes$ episodes with per-episode seeds
+avalanche-finalised for independence (free-tier limits handled by checkpointed
+resumption and backoff on transient errors). Pooled results exclude one task
+whose answer never substring-matched; the remaining five engaged the governor
+($\bar g>0.4$ at $\alpha=0$) with high baseline success, so the induced cost has
+room both to collapse success and to be rescued. An initial three-repeat
+$k$-sweep established suppression but was underpowered for collapse and
+rescue---at $\alpha=1$ the induced draw is a ${\approx}0.56$ per-escalation coin
+flip that three repeats cannot resolve---and it exposed a seeding defect that
+had made repeats non-independent; the run reported here fixes both. All three
+effects are present and well powered (Table~\ref{tab:gemini}).
+
+\paragraph{Amplification.} Under the cost-blind governor, success collapses
+monotonically with $\alpha$, $0.83\to0.58\to0.33$, while mean hard blocks rise
+$0.1\to4.0\to7.6$ per episode and the answered rate falls to $0.35$: on the
+three tasks that storm, blind reaches ${\sim}13$ hard blocks per episode and
+most runs never produce an answer. The governor's own tightening buries the
+agent.
+
+\paragraph{Suppression.} Mean intensity $\bar g$ falls with $\alpha$ under the
+cost-aware governor and stays pinned under the cost-blind one, in a clean
+monotone dose-response with backoff sensitivity: the $\bar g$ drop from
+$\alpha{=}0$ to $\alpha{=}2$ is $0.25,0.43,0.49$ for $k=1.5,3.0,6.0$
+(Table~\ref{tab:gemini}).
+
+\paragraph{Rescue, with an optimum in $k$.} At $\alpha=2$ the cost-blind
+governor sits at $0.33$ success; every cost-aware mode beats it, and the rescue
+peaks at an \emph{intermediate} backoff strength: $0.50,0.75,0.71$ for
+$k=1.5,3.0,6.0$, so $k{=}3$ gives the largest rescue ($+0.42$ over blind). Too
+gentle a backoff ($k{=}1.5$) leaves the block storm partly intact; too
+aggressive ($k{=}6$) stands down governance the agent still needs. The rescue is
+broad-based: of the three tasks that collapse under blind (T002, E003, C001;
+$0$--$12\%$ success, ${\sim}12$ hard blocks each), all are restored by $k{=}3$
+backoff to $88$--$100\%$ with block storms broken to near zero
+(Table~\ref{tab:gemini-tasks}); the two tasks that never stormed under blind had
+little to rescue. As on the stochastic substrate, the rescue mechanism is the
+breaking of the block loop, not avoidance of induced cost---cost-aware runs
+often incur \emph{more} induced failures because they keep acting.
+
+\begin{table}[t]
+\centering
+\caption{Real-LLM results (Gemini, $\poweredEpisodes$-episode powered run,
+$n=48$ per cell, pooled over five collapse-capable tasks). Cost-blind amplifies
+(success falls, blocks storm, intensity pinned); cost-aware suppresses its
+intensity in a monotone $k$ dose-response and rescues success, with the rescue
+peaking at $k{=}3$.}
+\label{tab:gemini}
+\begin{tabular}{llcccc}
+\toprule
+ & $\alpha$ & blind & $k{=}1.5$ & $k{=}3.0$ & $k{=}6.0$ \\
+\midrule
+\multirow{3}{*}{success}
+ & $0$ & $0.83$ & $0.83$ & $0.83$ & $0.83$ \\
+ & $1$ & $0.58$ & $0.75$ & $0.77$ & $0.77$ \\
+ & $2$ & $0.33$ & $0.50$ & $\mathbf{0.75}$ & $0.71$ \\
+\midrule
+\multirow{3}{*}{intensity $\bar g$}
+ & $0$ & $0.66$ & $0.69$ & $0.69$ & $0.68$ \\
+ & $1$ & $0.71$ & $0.62$ & $0.47$ & $0.40$ \\
+ & $2$ & $0.74$ & $0.44$ & $0.26$ & $0.19$ \\
+\midrule
+hard blocks & $2$ & $7.6$ & $2.4$ & $0.3$ & $0.1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Per-task success and hard blocks at $\alpha=2$ (Gemini, blind vs
+$k{=}3$ cost-aware, $n=8$ per cell). The three tasks that storm under blind are
+fully rescued, with block storms broken.}
+\label{tab:gemini-tasks}
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{success} & \multicolumn{2}{c}{hard blocks} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+task & blind & $k{=}3$ & blind & $k{=}3$ \\
+\midrule
+T002 & $0.00$ & $\mathbf{1.00}$ & $12.8$ & $0.2$ \\
+E003 & $0.00$ & $\mathbf{0.88}$ & $12.8$ & $0.8$ \\
+C001 & $0.12$ & $\mathbf{1.00}$ & $11.4$ & $0.4$ \\
+E002 & $0.88$ & $1.00$ & $1.8$ & $0.0$ \\
+C002 & $1.00$ & $0.62$ & $1.6$ & $0.1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+
+The demonstrated results support one transferable claim: \emph{intervention cost
+and cost-awareness are design variables for agent governors}. A governor whose
+corrective actions perturb the agent is not a safe default; at sufficient
+intervention cost a cost-blind governor can be worse than no governor at all
+(Table~\ref{tab:baselines}), collapsing the agent it was meant to protect
+through a self-reinforcing block storm. The remedy is not weaker governance but
+\emph{cost-aware} governance that senses when its own tightening is backfiring
+and stands down---and the fixed-weak control shows this benefit is adaptive, not
+an artifact of intervening less. That the amplification reproduces under two
+distinct cost channels, and that the suppression dose-response reproduces on a
+real LLM, indicates the effect is not tied to the specific injection or to the
+continuous IRAM-$\Omega$-Q formalism.
+
+We are deliberately narrow about the connection to that formalism. The
+defensible statement is that a single structural claim---control-generated
+disturbance can create positive feedback, and cost-awareness can break
+it---holds across two very different substrates; we do not claim to validate the
+IRAM-$\Omega$-Q architecture or reproduce its numerics. Two practical nuances follow from
+the data: cost-aware backoff helps only when the agent has a survivable
+un-regulated floor, and the optimal backoff strength must be tuned---it is
+intermediate and substrate-dependent, gentlest on the stochastic policy and
+peaking at $k{\approx}3$ on the real LLM, where too little backoff leaves the
+block storm intact and too much stands down governance the agent still needs.
+
+\section{Limitations}
+
+The stochastic-policy agent is hand-coded, so those (large-$N$) results bound
+substrate-independence of the mechanism, not learned-agent behaviour. On the
+real LLM, all three effects are powered ($n=48$ per cell), but the results come
+from a single model (Gemini~2.5~Flash) and five collapse-capable tasks; a
+broader task suite and additional models would strengthen generality. The
+induced-cost model is a one-sided quadratic in positive
+tightening; other cost shapes and injection points are possible, and a softer
+argument corruption that leaves targets valid attenuates the loop. The intensity
+ladder~\eqref{eq:intensity} is a monotone proxy for clamp strength, not a
+calibrated cost, and correctness is a substring match, which concentrates the
+success signal on tasks with short answers.
+
+\section{Conclusion}
+
+A supervisory governor for a tool-using agent can itself become a disturbance
+source when its interventions carry a cost that feeds back into the agent's
+state. On a large-sample stochastic substrate we demonstrate that a cost-blind
+governor amplifies this into block-storm collapse---under two independent cost
+channels, and to the point of being worse than no governor---while a cost-aware
+governor that backs off suppresses its intensity in a monotone dose-response and
+outperforms a rate-matched fixed governor, so the benefit is adaptive. A powered
+run on a real LLM agent (Gemini~2.5~Flash) reproduces all three effects---%
+amplification, the suppression dose-response, and rescue---with the rescue
+peaking at an intermediate backoff strength. Governor intervention cost, and the
+governor's awareness of it, are design variables that fixed-strength governance
+overlooks.
+
+\section*{Data and code availability}
+The governed-agent framework, induced-cost agents (both cost channels and the
+backoff regimes), experiment harnesses, and analysis scripts are maintained in
+the project repository; numerical summaries supporting the reported tables will
+be released with the powered confirmation run.
+
+\begin{thebibliography}{9}
+
+\bibitem{ziegler2026iramomegaq}
+V.~Ziegler.
+\newblock \emph{IRAM-$\Omega$-Q: A Computational Framework for Uncertainty
+Regulation in Adaptive Agents}.
+\newblock arXiv:2603.16020, 2026.
+
+\bibitem{ziegler2026carryover}
+V.~Ziegler.
+\newblock \emph{Anticipatory Regulation, Control Demand, and Hysteresis in
+Artificial Agents}.
+\newblock arXiv:2606.30975, 2026.
+
+\bibitem{ziegler2026switching}
+V.~Ziegler.
+\newblock \emph{Intermittent Control Is Not Diluted Control: A Switching Effect
+in Artificial Agency}.
+\newblock arXiv:2607.17432, 2026.
+
+\bibitem{astrom2008feedback}
+K.~J. \r{A}str\"om and R.~M. Murray.
+\newblock \emph{Feedback Systems: An Introduction for Scientists and Engineers}.
+\newblock Princeton University Press, 2008.
+
+\bibitem{sutton2018rl}
+R.~S. Sutton and A.~G. Barto.
+\newblock \emph{Reinforcement Learning: An Introduction}.
+\newblock MIT Press, second edition, 2018.
+
+\end{thebibliography}
+
+\end{document}
